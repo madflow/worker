@@ -6,6 +6,27 @@ import { runTaskList, runTaskListOnce } from "./main";
 import { makeWithPgClientFromPool, makeAddJob } from "./helpers";
 import { migrate } from "./migrate";
 
+const createPgPoolFromOptions = (
+  options: RunnerOptions,
+  releasers: Array<() => void | Promise<void>>
+) => {
+  let pgPool: Pool;
+  if (options.pgPool) {
+    pgPool = options.pgPool;
+  } else if (options.connectionString) {
+    pgPool = new Pool({ connectionString: options.connectionString });
+    releasers.push(() => pgPool.end());
+  } else if (process.env.DATABASE_URL) {
+    pgPool = new Pool({ connectionString: process.env.DATABASE_URL });
+    releasers.push(() => pgPool.end());
+  } else {
+    throw new Error(
+      "You must either specify `pgPool` or `connectionString`, or you must make the `DATABASE_URL` environmental variable available."
+    );
+  }
+  return pgPool;
+};
+
 const processOptions = async (options: RunnerOptions) => {
   const releasers: Array<() => void | Promise<void>> = [];
   const release = () => Promise.all(releasers.map(fn => fn()));
@@ -32,20 +53,8 @@ const processOptions = async (options: RunnerOptions) => {
       !options.pgPool || !options.connectionString,
       "Both `pgPool` and `connectionString` are set, at most one of these options should be provided"
     );
-    let pgPool: Pool;
-    if (options.pgPool) {
-      pgPool = options.pgPool;
-    } else if (options.connectionString) {
-      pgPool = new Pool({ connectionString: options.connectionString });
-      releasers.push(() => pgPool.end());
-    } else if (process.env.DATABASE_URL) {
-      pgPool = new Pool({ connectionString: process.env.DATABASE_URL });
-      releasers.push(() => pgPool.end());
-    } else {
-      throw new Error(
-        "You must either specify `pgPool` or `connectionString`, or you must make the `DATABASE_URL` environmental variable available."
-      );
-    }
+
+    const pgPool: Pool = createPgPoolFromOptions(options, releasers);
 
     pgPool.on("error", err => {
       /*
@@ -69,6 +78,19 @@ const processOptions = async (options: RunnerOptions) => {
   } catch (e) {
     release();
     throw e;
+  }
+};
+
+export const schemaOnly = async (options: RunnerOptions) => {
+  const releasers: Array<() => void | Promise<void>> = [];
+  const pgPool: Pool = createPgPoolFromOptions(options, releasers);
+  const withPgClient = makeWithPgClientFromPool(pgPool);
+  try {
+    await withPgClient(client => migrate(client));
+  } catch (e) {
+    throw e;
+  } finally {
+    await Promise.all(releasers.map(fn => fn()));
   }
 };
 

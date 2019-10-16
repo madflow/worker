@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import getTasks from "./getTasks";
 import { RunnerOptions } from "./interfaces";
-import { run, runOnce } from "./index";
+import { run, runOnce, schemaOnly } from "./index";
 import * as yargs from "yargs";
 import { POLL_INTERVAL, CONCURRENT_JOBS } from "./config";
 
@@ -18,6 +18,11 @@ const argv = yargs
     default: false,
   })
   .boolean("once")
+  .option("schema-only", {
+    description: "Create the database schema only, then exit",
+    default: false,
+  })
+  .boolean("schema-only")
   .option("watch", {
     description:
       "[EXPERIMENTAL] Watch task files for changes, automatically reloading the task code without restarting worker",
@@ -45,9 +50,14 @@ async function main() {
   const DATABASE_URL = argv.connection || process.env.DATABASE_URL || undefined;
   const ONCE = argv.once;
   const WATCH = argv.watch;
+  const SCHEMA_ONLY = argv["schema-only"];
 
   if (WATCH && ONCE) {
     throw new Error("Cannot specify both --watch and --once");
+  }
+
+  if (SCHEMA_ONLY && (WATCH || ONCE)) {
+    throw new Error("--schema-only cannot be used with --watch and/or --once");
   }
 
   if (!DATABASE_URL) {
@@ -66,7 +76,9 @@ async function main() {
     taskList: watchedTasks.tasks,
   };
 
-  if (ONCE) {
+  if (SCHEMA_ONLY) {
+    await schemaOnly(options);
+  } else if (ONCE) {
     await runOnce(options);
   } else {
     const { promise } = await run(options);
